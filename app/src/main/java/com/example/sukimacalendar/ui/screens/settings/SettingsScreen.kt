@@ -44,3 +44,24 @@ private fun SettingsRow(label: String, onClick: () -> Unit) {
     )
     HorizontalDivider()
 }
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsScreen(
+    currentRoute: String?,
+    onNavigate: (String) -> Unit,
+    onLogout: () -> Unit // ← 引数に追加
+) {
+    Scaffold(
+        topBar = { TopAppBar(title = { Text("設定") }) },
+        bottomBar = { BottomNavBar(currentRoute = currentRoute, onNavigate = onNavigate) }
+    ) { innerPadding ->
+        Column(modifier = Modifier.padding(innerPadding).padding(16.dp)) {
+            SettingsRow(label = "ユーザー名の変更") { /* TODO: 変更ダイアログ表示 */ }
+            SettingsRow(label = "通知設定") { /* TODO: 通知ON/OFF設定 */ }
+            SettingsRow(label = "ログアウト") {
+                onLogout() // ← ここで呼び出す
+            }
+        }
+    }
+}
