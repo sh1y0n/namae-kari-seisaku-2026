@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Notifications
@@ -21,16 +23,10 @@ import com.example.sukimacalendar.ui.theme.SukimaBlueDot
 import com.example.sukimacalendar.ui.theme.SukimaLavender
 import com.example.sukimacalendar.ui.theme.SukimaRedDot
 import com.example.sukimacalendar.ui.theme.SukimaSurfaceGray
+import java.time.YearMonth
 
 // ===============================================
 // CalendarMainScreen.kt(★一番重要な画面)
-// 役割: PPTXスライド8の左側モックアップに対応。
-//   上部: グループ切り替えタブ ("test group" / "test group2" / ＋)
-//   中部: 月間カレンダー。日付ごとに空きドットを表示
-//   下部: ナビゲーションバー(グループ・カレンダー・設定)
-//
-//   日付をタップすると、下からボトムシート(DateDetailBottomSheet.kt)がせり出す
-//   ——という流れをこの画面が管理している。
 // ===============================================
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -39,17 +35,21 @@ fun CalendarMainScreen(
     onNavigate: (String) -> Unit,
     onOpenNotification: () -> Unit
 ) {
-    // 今どのグループのタブを選んでいるか(index 0 = test group)
     var selectedGroupIndex by remember { mutableIntStateOf(0) }
+    var selectedDateStr by remember { mutableStateOf<String?>(null) }
 
-    // ボトムシートを開くために「今タップされている日付」を保持。
-    // null = 何も選ばれていない(ボトムシートは閉じている)
-    var selectedDay by remember { mutableStateOf<Int?>(null) }
+    // 240ヶ月分（前後10年）のページャーを用意。中央（120ページ目）を現在月に設定
+    val pagerState = rememberPagerState(initialPage = 120) { 240 }
+
+    // 現在表示中のYearMonthを計算
+    val currentYearMonth = remember(pagerState.currentPage) {
+        YearMonth.now().plusMonths((pagerState.currentPage - 120).toLong())
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("8月") },
+                title = { Text("${currentYearMonth.year}年 ${currentYearMonth.monthValue}月") },
                 actions = {
                     IconButton(onClick = onOpenNotification) {
                         Icon(Icons.Filled.Notifications, contentDescription = "通知")
@@ -70,19 +70,27 @@ fun CalendarMainScreen(
                 onSelect = { selectedGroupIndex = it }
             )
 
-            // ---- 月間カレンダー本体 ----
-            MonthGrid(
-                onDayClick = { day -> selectedDay = day } // 日付タップでボトムシートを開く
-            )
+            // ---- 横スワイプで月を変更できるHorizontalPager ----
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier.fillMaxSize()
+            ) { page ->
+                val targetYearMonth = YearMonth.now().plusMonths((page - 120).toLong())
+                MonthGrid(
+                    yearMonth = targetYearMonth,
+                    onDayClick = { day ->
+                        selectedDateStr = "${targetYearMonth.year}年${targetYearMonth.monthValue}月${day}日"
+                    }
+                )
+            }
         }
     }
 
     // ---- 日付詳細ボトムシート ----
-    // selectedDayがnullでない(=日付がタップされた)ときだけ表示する。
-    selectedDay?.let { day ->
+    selectedDateStr?.let { dateStr ->
         DateDetailBottomSheet(
-            date = "${day}日", // IntをStringに変換して渡す
-            onDismiss = { selectedDay = null } // 閉じる時はnullに戻す
+            date = dateStr,
+            onDismiss = { selectedDateStr = null }
         )
     }
 }
@@ -108,8 +116,21 @@ private fun GroupTabRow(groupNames: List<String>, selectedIndex: Int, onSelect: 
 // 月間カレンダーのグリッド本体
 // ===============================================
 @Composable
-private fun MonthGrid(onDayClick: (Int) -> Unit) {
+private fun MonthGrid(yearMonth: YearMonth, onDayClick: (Int) -> Unit) {
     val weekLabels = listOf("日", "月", "火", "水", "木", "金", "土")
+
+    // 月初めの曜日から空白セル数を計算（日曜始まり：日曜=0, 月曜=1...土曜=6）
+    val firstDayOfWeek = yearMonth.atDay(1).dayOfWeek
+    val startDayOffset = firstDayOfWeek.value % 7
+    val daysInMonth = yearMonth.lengthOfMonth()
+
+    // リストの要素を作る（null = 空白セル, Int = 日付）
+    val calendarCells = buildList {
+        repeat(startDayOffset) { add(null) }
+        for (day in 1..daysInMonth) {
+            add(day)
+        }
+    }
 
     Column(modifier = Modifier.padding(8.dp)) {
         Row(modifier = Modifier.fillMaxWidth()) {
@@ -127,10 +148,19 @@ private fun MonthGrid(onDayClick: (Int) -> Unit) {
 
         LazyVerticalGrid(
             columns = GridCells.Fixed(7),
-            modifier = Modifier.heightIn(max = 400.dp)
+            modifier = Modifier.fillMaxWidth()
         ) {
-            items((1..31).toList()) { day ->
-                DayCell(day = day, onClick = { onDayClick(day) })
+            items(calendarCells) { cellDay ->
+                if (cellDay != null) {
+                    DayCell(day = cellDay, onClick = { onDayClick(cellDay) })
+                } else {
+                    // 月初めの空白セル
+                    Box(
+                        modifier = Modifier
+                            .aspectRatio(1f)
+                            .padding(2.dp)
+                    )
+                }
             }
         }
     }

@@ -9,10 +9,7 @@ package com.example.sukimacalendar.data.model
 //      ドキュメント構造に合わせて調整して使い回す想定。
 // ===============================================
 
-data class Group(
-    val id: String,
-    val name: String
-)
+
 
 // 朝・昼・夜の3枠。PPTXの「この日の空き時間」の選択肢そのもの。
 enum class TimeSlot(val label: String) {
@@ -35,4 +32,10 @@ val sampleGroups = listOf(
 val sampleAvailability = listOf(
     MemberAvailability("よしとう", listOf(TimeSlot.NIGHT)),
     MemberAvailability("かたな", listOf(TimeSlot.MORNING, TimeSlot.AFTERNOON, TimeSlot.NIGHT)) // 「一日」= 全枠
+)
+
+data class Group(
+    val id: String,
+    val name: String,
+    val inviteCode: String = "" // ←ここにこれを追加
 )
