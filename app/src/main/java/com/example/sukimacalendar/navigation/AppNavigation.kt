@@ -37,13 +37,11 @@ fun AppNavigation() {
 
     NavHost(navController = navController, startDestination = Screen.Auth.route) {
 
-        // ---- 認証・スタート画面 ----
         composable(Screen.Auth.route) {
             AuthScreen(
-                onLoginSuccess = {
-                    // ログイン画面には戻れないようにする(popUpTo + inclusive)。
-                    // これをしないと、カレンダー画面で戻るボタンを押すとログイン画面に戻ってしまう。
+                onAuthSuccess = {
                     navController.navigate(Screen.Calendar.route) {
+                        // 認証画面をバックスタック（履歴）からポップして、戻るボタンでログイン画面に戻らないようにする
                         popUpTo(Screen.Auth.route) { inclusive = true }
                     }
                 }

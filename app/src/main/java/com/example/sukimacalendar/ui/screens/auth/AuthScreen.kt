@@ -5,106 +5,117 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.example.sukimacalendar.data.repository.AuthRepository
 import kotlinx.coroutines.launch
 
-// ===============================================
-// AuthScreen.kt
-// 役割: アプリを最初に開いたときの画面。ユーザー名を入力してログイン/登録する。
-//
-// 今の実装状態(DB接続後):
-//   ボタンを押すと AuthRepository.signInWithUsername() を呼び、
-//   実際にFirebase Anonymous Authでサインインし、Firestoreにユーザー名を保存する。
-//   通信中はボタンをローディング表示にし、失敗したらエラーメッセージを出す。
-//
-// onLoginSuccess: ログイン成功時に呼ぶ関数。呼び出し元(AppNavigation.kt)から渡される。
-// ===============================================
 @Composable
-fun AuthScreen(onLoginSuccess: () -> Unit) {
-    var userName by remember { mutableStateOf("") }
-    var isLoading by remember { mutableStateOf(false) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
-
-    // rememberCoroutineScope(): ボタンのonClickのような「Composableではない場所」から
-    // suspend関数(signInWithUsername)を呼ぶために必要なコルーチンスコープ。
+fun AuthScreen(
+    onAuthSuccess: () -> Unit
+) {
+    val authRepository = remember { AuthRepository() }
     val scope = rememberCoroutineScope()
 
-    // remember { AuthRepository() }: 画面が再描画されるたびに新しいインスタンスを作らないようにする。
-    val authRepository = remember { AuthRepository() }
+    var userId by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var isSignUpMode by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var isLoading by remember { mutableStateOf(false) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background
     ) {
-        Text(
-            text = "隙間カレンダー",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = "友達との「いつ空いてる？」をもっと気軽に。",
-            style = MaterialTheme.typography.bodyMedium
-        )
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        OutlinedTextField(
-            value = userName,
-            onValueChange = {
-                userName = it
-                errorMessage = null // 入力し直したら前のエラーは消す
-            },
-            label = { Text("ユーザー名") },
-            singleLine = true,
-            isError = errorMessage != null,
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Button(
-            onClick = {
-                val trimmed = userName.trim()
-                if (trimmed.isEmpty()) {
-                    errorMessage = "ユーザー名を入力してください"
-                    return@Button
-                }
-                isLoading = true
-                errorMessage = null
-
-                // scope.launch: ここでコルーチンを開始し、suspend関数を呼べるようにする。
-                // UIスレッドをブロックせずに通信が終わるのを待てる。
-                scope.launch {
-                    val result = authRepository.signInWithUsername(trimmed)
-                    isLoading = false
-                    result
-                        .onSuccess { onLoginSuccess() }
-                        .onFailure { e -> errorMessage = "ログインに失敗しました: ${e.message}" }
-                }
-            },
-            enabled = !isLoading,
-            modifier = Modifier.fillMaxWidth()
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            if (isLoading) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(20.dp),
-                    color = MaterialTheme.colorScheme.onPrimary,
-                    strokeWidth = 2.dp
-                )
-            } else {
-                Text("ログイン / 新規登録")
-            }
-        }
+            Text(
+                text = if (isSignUpMode) "アカウント作成" else "スキマカレンダー ログイン",
+                style = MaterialTheme.typography.headlineMedium
+            )
 
-        errorMessage?.let { message ->
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(text = message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+            Spacer(modifier = Modifier.height(32.dp))
+
+            OutlinedTextField(
+                value = userId,
+                onValueChange = { userId = it },
+                label = { Text("ユーザーID") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            OutlinedTextField(
+                value = password,
+                onValueChange = { password = it },
+                label = { Text("パスワード") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            if (errorMessage != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = errorMessage!!,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Button(
+                onClick = {
+                    if (userId.isBlank() || password.isBlank()) {
+                        errorMessage = "IDとパスワードを入力してください"
+                        return@Button
+                    }
+                    isLoading = true
+                    errorMessage = null
+
+                    scope.launch {
+                        val result = if (isSignUpMode) {
+                            authRepository.signUp(userId, password)
+                        } else {
+                            authRepository.login(userId, password)
+                        }
+
+                        isLoading = false
+                        if (result.isSuccess) {
+                            onAuthSuccess()
+                        } else {
+                            errorMessage = "エラー: ${result.exceptionOrNull()?.localizedMessage}"
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !isLoading
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary)
+                } else {
+                    Text(text = if (isSignUpMode) "登録してはじめる" else "ログイン")
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            TextButton(onClick = {
+                isSignUpMode = !isSignUpMode
+                errorMessage = null
+            }) {
+                Text(
+                    text = if (isSignUpMode) "すでにアカウントをお持ちですか？ ログイン"
+                    else "アカウントをお持ちでないですか？ 新規登録"
+                )
+            }
         }
     }
 }
