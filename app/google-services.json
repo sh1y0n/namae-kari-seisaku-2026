@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "537726824192",
+    "project_id": "sukima-calendar",
+    "storage_bucket": "sukima-calendar.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:537726824192:android:1343470216bc86b6bd4de5",
+        "android_client_info": {
+          "package_name": "com.example.sukimacalendar"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC9_je1e8lWjCtQjPv6cPBDloLytQ0vTuA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

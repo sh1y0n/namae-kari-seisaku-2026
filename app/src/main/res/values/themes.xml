@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+役割: Composeで画面を描く前の、起動直後(スプラッシュ含む)のシステムレベルのテーマ。
+     実際の配色(ボタンの色など)はComposeの ui/theme/ 側で管理するので、
+     ここは最低限の設定のみでOK。
+-->
 <resources>
-
-    <style name="Theme.MyApplication" parent="android:Theme.Material.Light.NoActionBar" />
+    <style name="Theme.SukimaCalendar" parent="android:Theme.Material.Light.NoActionBar" />
 </resources>

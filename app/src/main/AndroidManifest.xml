@@ -1,24 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
+<!--
+===============================================
+AndroidManifest.xml
+役割: アプリの「起動口」を定義するファイル。
+     どのActivity(=画面の入れ物)が最初に開かれるかをここで指定する。
+     今回はComposeで画面遷移を全部やるので、Activityは MainActivity 1つだけでOK。
+     (認証画面もカレンダー画面も、MainActivityの中でComposeが切り替えて表示する)
+===============================================
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <uses-permission android:name="android.permission.INTERNET" />
+    
     <application
         android:allowBackup="true"
-        android:dataExtractionRules="@xml/data_extraction_rules"
-        android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
-        android:label="@string/app_name"
-        android:roundIcon="@mipmap/ic_launcher_round"
-        android:supportsRtl="true"
-        android:theme="@style/Theme.MyApplication">
+        android:label="隙間カレンダー"
+        android:theme="@style/Theme.SukimaCalendar">
+
+        <!-- android:exported="true" は「他のアプリからも起動できる」設定。
+             ランチャー(ホーム画面)から起動するActivityには必須 -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:label="@string/app_name"
-            android:theme="@style/Theme.MyApplication">
+            android:theme="@style/Theme.SukimaCalendar">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
-
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>

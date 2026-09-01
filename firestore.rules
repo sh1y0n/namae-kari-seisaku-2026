@@ -1,0 +1,32 @@
+// ===============================================
+// firestore.rules
+// 役割: 誰がFirestoreのどのデータを読み書きできるかを制限するルール。
+//      「テストモード」のままだと全世界の誰でも読み書きできてしまうため、
+//      最低限「ログインしている人だけ」に絞るルールをここに用意する。
+//
+// 使い方:
+//   Firebaseコンソール → Firestore Database → ルール タブ を開き、
+//   このファイルの中身をそのまま貼り付けて「公開」を押す。
+// ===============================================
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // users/{uid}: 自分の情報は自分だけが読み書きできる。
+    // 他人のプロフィールも「読む」のはグループ機能上必要になるため許可し、
+    // 「書く」のは本人のみに制限している。
+    match /users/{userId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // groups/{groupId}: ログインしていれば誰でも新規作成でき、
+    // 既存グループの読み書きは「そのグループのmemberIdsに自分が含まれている場合」だけ許可する。
+    match /groups/{groupId} {
+      allow read, update, delete: if request.auth != null
+        && request.auth.uid in resource.data.memberIds;
+      allow create: if request.auth != null
+        && request.auth.uid in request.resource.data.memberIds;
+    }
+  }
+}
