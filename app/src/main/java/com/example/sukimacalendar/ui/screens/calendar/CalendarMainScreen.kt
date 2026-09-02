@@ -3,9 +3,6 @@ package com.example.sukimacalendar.ui.screens.calendar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -20,13 +17,12 @@ import androidx.compose.ui.unit.dp
 import com.example.sukimacalendar.data.model.sampleGroups
 import com.example.sukimacalendar.ui.components.BottomNavBar
 import com.example.sukimacalendar.ui.theme.SukimaBlueDot
-import com.example.sukimacalendar.ui.theme.SukimaLavender
 import com.example.sukimacalendar.ui.theme.SukimaRedDot
 import com.example.sukimacalendar.ui.theme.SukimaSurfaceGray
 import java.time.YearMonth
 
 // ===============================================
-// CalendarMainScreen.kt(★一番重要な画面)
+// CalendarMainScreen.kt (一番重要な画面)
 // ===============================================
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -61,7 +57,11 @@ fun CalendarMainScreen(
             BottomNavBar(currentRoute = currentRoute, onNavigate = onNavigate)
         }
     ) { innerPadding ->
-        Column(modifier = Modifier.padding(innerPadding)) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+        ) {
 
             // ---- グループ切り替えタブ ----
             GroupTabRow(
@@ -73,7 +73,9 @@ fun CalendarMainScreen(
             // ---- 横スワイプで月を変更できるHorizontalPager ----
             HorizontalPager(
                 state = pagerState,
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
             ) { page ->
                 val targetYearMonth = YearMonth.now().plusMonths((page - 120).toLong())
                 MonthGrid(
@@ -88,7 +90,7 @@ fun CalendarMainScreen(
 
     // ---- 日付詳細ボトムシート ----
     selectedDateStr?.let { dateStr ->
-        DateDetailBottomSheet(
+        CalendarDateDetailBottomSheet(
             date = dateStr,
             onDismiss = { selectedDateStr = null }
         )
@@ -113,53 +115,81 @@ private fun GroupTabRow(groupNames: List<String>, selectedIndex: Int, onSelect: 
 }
 
 // ===============================================
-// 月間カレンダーのグリッド本体
+// 月間カレンダーのグリッド本体（Column & Rowベースで縦いっぱいに均等配置）
 // ===============================================
 @Composable
 private fun MonthGrid(yearMonth: YearMonth, onDayClick: (Int) -> Unit) {
     val weekLabels = listOf("日", "月", "火", "水", "木", "金", "土")
 
-    // 月初めの曜日から空白セル数を計算（日曜始まり：日曜=0, 月曜=1...土曜=6）
     val firstDayOfWeek = yearMonth.atDay(1).dayOfWeek
     val startDayOffset = firstDayOfWeek.value % 7
     val daysInMonth = yearMonth.lengthOfMonth()
 
-    // リストの要素を作る（null = 空白セル, Int = 日付）
+    // セルリストを作成（null = 空白セル）
     val calendarCells = buildList {
         repeat(startDayOffset) { add(null) }
         for (day in 1..daysInMonth) {
             add(day)
         }
+        // 7の倍数になるように末尾をnullで埋めてきれいなグリッドにする
+        while (size % 7 != 0) {
+            add(null)
+        }
     }
 
-    Column(modifier = Modifier.padding(8.dp)) {
-        Row(modifier = Modifier.fillMaxWidth()) {
+    // 週間（7日ごと）の行に分割
+    val weeks = calendarCells.chunked(7)
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+    ) {
+        // 曜日ヘッダー
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 4.dp)
+        ) {
             weekLabels.forEach { label ->
                 Text(
                     text = label,
                     modifier = Modifier.weight(1f),
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                    style = MaterialTheme.typography.labelSmall
+                    style = MaterialTheme.typography.labelMedium
                 )
             }
         }
 
-        Spacer(modifier = Modifier.height(4.dp))
-
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(7),
-            modifier = Modifier.fillMaxWidth()
+        // 週ごとの行を weight(1f) で縦方向いっぱいに均等配置
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            verticalArrangement = Arrangement.SpaceEvenly
         ) {
-            items(calendarCells) { cellDay ->
-                if (cellDay != null) {
-                    DayCell(day = cellDay, onClick = { onDayClick(cellDay) })
-                } else {
-                    // 月初めの空白セル
-                    Box(
-                        modifier = Modifier
-                            .aspectRatio(1f)
-                            .padding(2.dp)
-                    )
+            weeks.forEach { week ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    week.forEach { cellDay ->
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .padding(2.dp)
+                        ) {
+                            if (cellDay != null) {
+                                DayCell(
+                                    day = cellDay,
+                                    onClick = { onDayClick(cellDay) }
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -173,14 +203,18 @@ private fun MonthGrid(yearMonth: YearMonth, onDayClick: (Int) -> Unit) {
 private fun DayCell(day: Int, onClick: () -> Unit) {
     Box(
         modifier = Modifier
-            .aspectRatio(1f)
-            .padding(2.dp)
+            .fillMaxSize()
             .background(SukimaSurfaceGray)
             .clickable { onClick() },
         contentAlignment = Alignment.TopCenter
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(text = day.toString(), style = MaterialTheme.typography.bodyMedium)
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(4.dp)
+        ) {
+            Text(text = day.toString(), style = MaterialTheme.typography.bodyLarge)
+
+            Spacer(modifier = Modifier.height(2.dp))
 
             if (day == 1) {
                 Row {
@@ -197,7 +231,31 @@ private fun Dot(color: Color) {
     Box(
         modifier = Modifier
             .padding(1.dp)
-            .size(8.dp)
+            .size(6.dp)
             .background(color, shape = CircleShape)
     )
+}
+
+// ===============================================
+// 日付詳細ボトムシート
+// ===============================================
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CalendarDateDetailBottomSheet(
+    date: String,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(24.dp)
+        ) {
+            Text(text = "$date の詳細", style = MaterialTheme.typography.titleLarge)
+            Spacer(modifier = Modifier.height(16.dp))
+            // ここに予定の詳細や空き時間登録画面などを配置
+        }
+    }
 }
