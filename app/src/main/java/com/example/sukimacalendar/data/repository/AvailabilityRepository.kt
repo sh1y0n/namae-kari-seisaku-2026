@@ -2,22 +2,25 @@ package com.example.sukimacalendar.data.repository
 
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
 
 class AvailabilityRepository {
     private val firestore = FirebaseFirestore.getInstance()
     private val auth = FirebaseAuth.getInstance()
 
-    // 選択された日付たちに、指定した時間帯とメモをまとめて保存する（同一ユーザー・同一グループ・同一日は上書き）
     suspend fun saveAvailabilities(
         groupId: String,
         dates: Set<String>,
         timeSlots: List<String>,
         memo: String
     ): Result<Unit> = runCatching {
-        val userId = auth.currentUser?.uid ?: throw IllegalStateException("ログインしていません")
+        val currentUser = auth.currentUser ?: throw IllegalStateException("ログインしていません")
+        val userId = currentUser.uid
+        val userName = currentUser.displayName?.takeIf { it.isNotBlank() } ?: "メンバー"
 
-        // 🔴 日付が選択されていない場合はここで弾く
         if (dates.isEmpty()) {
             throw IllegalStateException("日付が選択されていません")
         }
@@ -25,12 +28,12 @@ class AvailabilityRepository {
         val batch = firestore.batch()
 
         dates.forEach { date ->
-            // 🔴 ユーザーID、グループID、日付を組み合わせた一意のドキュメントIDを作成することで上書きを実現
             val docId = "${userId}_${groupId}_${date}"
             val docRef = firestore.collection("availabilities").document(docId)
 
             val data = mapOf(
                 "userId" to userId,
+                "userName" to userName,
                 "groupId" to groupId,
                 "date" to date,
                 "timeSlots" to timeSlots,
@@ -42,4 +45,22 @@ class AvailabilityRepository {
 
         batch.commit().await()
     }
+
+    fun observeAvailabilitiesForGroup(groupId: String): Flow<List<Map<String, Any>>> =
+        callbackFlow {
+            val listener = firestore.collection("availabilities")
+                .whereEqualTo("groupId", groupId)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        return@addSnapshotListener
+                    }
+
+                    val list = snapshot?.documents?.mapNotNull { doc ->
+                        doc.data?.plus("id" to doc.id)
+                    } ?: emptyList()
+
+                    trySend(list)
+                }
+            awaitClose { listener.remove() }
+        }
 }

@@ -4,8 +4,11 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -17,6 +20,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.sukimacalendar.data.model.Group
@@ -25,12 +30,10 @@ import com.example.sukimacalendar.data.repository.GroupRepository
 import com.example.sukimacalendar.ui.components.BottomNavBar
 import com.example.sukimacalendar.ui.theme.SukimaLavender
 import com.example.sukimacalendar.ui.theme.SukimaSurfaceGray
+import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.launch
 import java.time.YearMonth
 
-// ===============================================
-// CalendarMainScreen.kt (完成版)
-// ===============================================
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CalendarMainScreen(
@@ -40,16 +43,24 @@ fun CalendarMainScreen(
 ) {
     var selectedGroupIndex by remember { mutableIntStateOf(0) }
 
-    // リポジトリの用意
     val groupRepository = remember { GroupRepository() }
     val availabilityRepository = remember { AvailabilityRepository() }
     val scope = rememberCoroutineScope()
+    val currentUserId = FirebaseAuth.getInstance().currentUser?.uid
 
-    // Firestoreから自分が所属するグループをリアルタイム取得する
     val groups by groupRepository.observeMyGroups()
         .collectAsStateWithLifecycle(initialValue = emptyList())
 
-    // スナックバー用
+    val currentGroup = groups.getOrNull(selectedGroupIndex) ?: groups.firstOrNull()
+    val currentGroupId = currentGroup?.id ?: ""
+
+    val groupAvailabilities by availabilityRepository.observeAvailabilitiesForGroup(currentGroupId)
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+
+    val availabilitiesByDate = remember(groupAvailabilities) {
+        groupAvailabilities.groupBy { it["date"] as? String ?: "" }
+    }
+
     var snackbarMessage by remember { mutableStateOf<String?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -60,17 +71,15 @@ fun CalendarMainScreen(
         }
     }
 
-    // 複数選択モードの状態管理
     var isMultiSelectMode by remember { mutableStateOf(false) }
     var selectedDates by remember { mutableStateOf(setOf<String>()) }
 
-    // 空き時間登録ボトムシートの開閉フラグ
     var showBatchRegisterSheet by remember { mutableStateOf(false) }
+    var showDayDetailSheet by remember { mutableStateOf(false) }
+    var clickedDateForDetail by remember { mutableStateOf("") }
 
-    // 240ヶ月分（前後10年）のページャーを用意。中央（120ページ目）を現在月に設定
     val pagerState = rememberPagerState(initialPage = 120) { 240 }
 
-    // 現在表示中のYearMonthを計算
     val currentYearMonth = remember(pagerState.currentPage) {
         YearMonth.now().plusMonths((pagerState.currentPage - 120).toLong())
     }
@@ -118,8 +127,6 @@ fun CalendarMainScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-
-            // ---- グループ切り替えタブ（Firestoreのリアルタイムグループを使用） ----
             if (groups.isEmpty()) {
                 Box(
                     modifier = Modifier
@@ -137,7 +144,6 @@ fun CalendarMainScreen(
                 )
             }
 
-            // ---- 横スワイプで月を変更できるHorizontalPager ----
             HorizontalPager(
                 state = pagerState,
                 modifier = Modifier
@@ -149,6 +155,8 @@ fun CalendarMainScreen(
                     yearMonth = targetYearMonth,
                     isMultiSelectMode = isMultiSelectMode,
                     selectedDates = selectedDates,
+                    availabilitiesByDate = availabilitiesByDate,
+                    currentUserId = currentUserId,
                     onDayClick = { day ->
                         val dateStr = "${targetYearMonth.year}年${targetYearMonth.monthValue}月${day}日"
                         if (isMultiSelectMode) {
@@ -158,8 +166,8 @@ fun CalendarMainScreen(
                                 selectedDates + dateStr
                             }
                         } else {
-                            selectedDates = setOf(dateStr)
-                            showBatchRegisterSheet = true
+                            clickedDateForDetail = dateStr
+                            showDayDetailSheet = true
                         }
                     },
                     onDayLongClick = { day ->
@@ -174,7 +182,36 @@ fun CalendarMainScreen(
         }
     }
 
-    // ---- 空き時間登録ボトムシート ----
+    if (showDayDetailSheet && clickedDateForDetail.isNotEmpty()) {
+        val dayAvailabilities = availabilitiesByDate[clickedDateForDetail] ?: emptyList()
+        val myAvailability = dayAvailabilities.find { avail -> avail["userId"] == currentUserId }
+
+        DayDetailBottomSheet(
+            dateStr = clickedDateForDetail,
+            dayAvailabilities = dayAvailabilities,
+            currentUserId = currentUserId,
+            initialSlots = (myAvailability?.get("timeSlots") as? List<*>)?.mapNotNull { it as? String } ?: emptyList(),
+            initialMemo = (myAvailability?.get("memo") as? String) ?: "",
+            onDismiss = { showDayDetailSheet = false },
+            onSave = { slots, memo ->
+                scope.launch {
+                    val groupId = currentGroup?.id ?: return@launch
+                    availabilityRepository.saveAvailabilities(
+                        groupId = groupId,
+                        dates = setOf(clickedDateForDetail),
+                        timeSlots = slots,
+                        memo = memo
+                    ).onSuccess {
+                        snackbarMessage = "空き時間を更新しました！"
+                    }.onFailure { e ->
+                        snackbarMessage = "更新に失敗しました: ${e.localizedMessage}"
+                    }
+                }
+                showDayDetailSheet = false
+            }
+        )
+    }
+
     if (showBatchRegisterSheet) {
         BatchRegisterBottomSheet(
             selectedDates = selectedDates,
@@ -185,7 +222,6 @@ fun CalendarMainScreen(
                 }
             },
             onRegister = { selectedSlots, memo ->
-                // 🔴 選択されている日付を非同期処理の前に退避させておく
                 val targetDates = selectedDates
 
                 scope.launch {
@@ -194,9 +230,7 @@ fun CalendarMainScreen(
                         return@launch
                     }
 
-                    // 現在選択されているリアルタイムグループのIDを取得
-                    val currentGroup = groups.getOrNull(selectedGroupIndex) ?: groups.first()
-                    val groupId = currentGroup.id
+                    val groupId = currentGroup?.id ?: return@launch
 
                     availabilityRepository.saveAvailabilities(
                         groupId = groupId,
@@ -204,7 +238,7 @@ fun CalendarMainScreen(
                         timeSlots = selectedSlots,
                         memo = memo
                     ).onSuccess {
-                        snackbarMessage = "空き時間を登録しました！"
+                        snackbarMessage = "空き時間を一括登録しました！"
                     }.onFailure { e ->
                         snackbarMessage = "登録に失敗しました: ${e.localizedMessage}"
                     }
@@ -218,9 +252,6 @@ fun CalendarMainScreen(
     }
 }
 
-// ===============================================
-// グループ切り替えタブ部分
-// ===============================================
 @Composable
 private fun GroupTabRow(groups: List<Group>, selectedIndex: Int, onSelect: (Int) -> Unit) {
     val safeIndex = selectedIndex.coerceIn(0, groups.size - 1)
@@ -235,14 +266,13 @@ private fun GroupTabRow(groups: List<Group>, selectedIndex: Int, onSelect: (Int)
     }
 }
 
-// ===============================================
-// 月間カレンダーのグリッド本体
-// ===============================================
 @Composable
 private fun MonthGrid(
     yearMonth: YearMonth,
     isMultiSelectMode: Boolean,
     selectedDates: Set<String>,
+    availabilitiesByDate: Map<String, List<Map<String, Any>>>,
+    currentUserId: String?,
     onDayClick: (Int) -> Unit,
     onDayLongClick: (Int) -> Unit
 ) {
@@ -308,9 +338,15 @@ private fun MonthGrid(
                                 val dateStr = "${yearMonth.year}年${yearMonth.monthValue}月${cellDay}日"
                                 val isSelected = selectedDates.contains(dateStr)
 
+                                val dayAvailabilities = availabilitiesByDate[dateStr] ?: emptyList()
+                                val isMyRegistered = dayAvailabilities.any { it["userId"] == currentUserId }
+                                val otherAvailabilities = dayAvailabilities.filter { it["userId"] != currentUserId }
+
                                 DayCell(
                                     day = cellDay,
                                     isSelected = isSelected,
+                                    isMyRegistered = isMyRegistered,
+                                    otherAvailabilities = otherAvailabilities,
                                     onClick = { onDayClick(cellDay) },
                                     onLongClick = { onDayLongClick(cellDay) }
                                 )
@@ -323,18 +359,35 @@ private fun MonthGrid(
     }
 }
 
-// ===============================================
-// カレンダー1マス分
-// ===============================================
+private val memberColors = listOf(
+    Color(0xFFE57373),
+    Color(0xFF81C784),
+    Color(0xFF64B5F6),
+    Color(0xFFFFB74D),
+    Color(0xFFBA68C8),
+    Color(0xFF4DB6AC)
+)
+
+private fun getMemberColor(userId: String): Color {
+    val index = Math.abs(userId.hashCode()) % memberColors.size
+    return memberColors[index]
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun DayCell(
     day: Int,
     isSelected: Boolean,
+    isMyRegistered: Boolean,
+    otherAvailabilities: List<Map<String, Any>>,
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
-    val backgroundColor = if (isSelected) SukimaLavender.copy(alpha = 0.5f) else SukimaSurfaceGray
+    val backgroundColor = when {
+        isSelected -> SukimaLavender.copy(alpha = 0.5f)
+        isMyRegistered -> SukimaLavender.copy(alpha = 0.3f)
+        else -> SukimaSurfaceGray
+    }
 
     Box(
         modifier = Modifier
@@ -351,13 +404,252 @@ private fun DayCell(
             modifier = Modifier.padding(4.dp)
         ) {
             Text(text = day.toString(), style = MaterialTheme.typography.bodyLarge)
+
+            if (otherAvailabilities.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(2.dp))
+                val maxVisibleDots = 3
+                val visibleItems = otherAvailabilities.take(maxVisibleDots)
+                val remainingCount = otherAvailabilities.size - maxVisibleDots
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    visibleItems.forEach { item ->
+                        val uid = item["userId"] as? String ?: ""
+                        val dotColor = getMemberColor(uid)
+                        Box(
+                            modifier = Modifier
+                                .size(5.dp)
+                                .clip(CircleShape)
+                                .background(dotColor)
+                        )
+                    }
+                    if (remainingCount > 0) {
+                        Text(
+                            text = "+$remainingCount",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
         }
     }
 }
 
-// ===============================================
-// 空き時間登録ボトムシート
-// ===============================================
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
+@Composable
+private fun DayDetailBottomSheet(
+    dateStr: String,
+    dayAvailabilities: List<Map<String, Any>>,
+    currentUserId: String?,
+    initialSlots: List<String>,
+    initialMemo: String,
+    onDismiss: () -> Unit,
+    onSave: (List<String>, String) -> Unit
+) {
+    var selectedSlots by remember { mutableStateOf(if (initialSlots.isNotEmpty()) initialSlots.toSet() else setOf("一日")) }
+    var memoText by remember { mutableStateOf(initialMemo) }
+    // 🔴 初期状態を閉じた状態（false）にする
+    var isEditExpanded by remember { mutableStateOf(false) }
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp, vertical = 16.dp)
+        ) {
+            Text(text = dateStr, style = MaterialTheme.typography.titleMedium)
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Text(text = "メンバーの空き状況 (${dayAvailabilities.size}人)", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+            Spacer(modifier = Modifier.height(6.dp))
+
+            if (dayAvailabilities.isEmpty()) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = SukimaSurfaceGray,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Box(modifier = Modifier.padding(12.dp), contentAlignment = Alignment.Center) {
+                        Text("この日に空き時間を登録しているメンバーはいません", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 140.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    items(dayAvailabilities) { item ->
+                        val uid = item["userId"] as? String ?: ""
+                        val userName = item["userName"] as? String ?: "メンバー (${uid.take(4)})"
+                        val slots = (item["timeSlots"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+                        val memo = item["memo"] as? String ?: ""
+                        val isMe = (uid == currentUserId)
+
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = if (isMe) SukimaLavender.copy(alpha = 0.2f) else SukimaSurfaceGray,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    if (!isMe) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(6.dp)
+                                                .clip(CircleShape)
+                                                .background(getMemberColor(uid))
+                                        )
+                                    }
+                                    Text(
+                                        text = if (isMe) "あなた" else userName,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = if (isMe) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                    )
+                                    if (memo.isNotBlank()) {
+                                        Text(
+                                            text = "($memo)",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.secondary,
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = slots.joinToString(", "),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.secondary
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+            HorizontalDivider()
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // 🔴 タップしてアコーディオンの開閉を切り替える部分
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .combinedClickable(onClick = { isEditExpanded = !isEditExpanded })
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "自分の空き時間を編集",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                IconButton(onClick = { isEditExpanded = !isEditExpanded }, modifier = Modifier.size(24.dp)) {
+                    Icon(
+                        imageVector = if (isEditExpanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                        contentDescription = "編集を開閉"
+                    )
+                }
+            }
+
+            // 🔴 isEditExpandedがtrueのときだけ表示する
+            if (isEditExpanded) {
+                Spacer(modifier = Modifier.height(8.dp))
+
+                val isOneDaySelected = selectedSlots.contains("一日")
+                Surface(
+                    onClick = { selectedSlots = setOf("一日") },
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (isOneDaySelected) MaterialTheme.colorScheme.primaryContainer else SukimaSurfaceGray,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Box(
+                        modifier = Modifier.padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "一日",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (isOneDaySelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val subSlots = listOf("朝", "昼", "夜")
+                    subSlots.forEach { slot ->
+                        val isSelected = selectedSlots.contains(slot)
+                        Surface(
+                            onClick = {
+                                selectedSlots = if (isSelected) {
+                                    val next = selectedSlots - slot
+                                    if (next.isEmpty()) setOf("一日") else next
+                                } else {
+                                    (selectedSlots - "一日") + slot
+                                }
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else SukimaSurfaceGray,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Box(
+                                modifier = Modifier.padding(vertical = 6.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = slot,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                OutlinedTextField(
+                    value = memoText,
+                    onValueChange = { memoText = it },
+                    label = { Text("メモ（任意）") },
+                    modifier = Modifier.fillMaxWidth(),
+                    maxLines = 2
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Button(
+                    onClick = { onSave(selectedSlots.toList(), memoText) },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(text = "この内容で保存・更新する")
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 private fun BatchRegisterBottomSheet(
@@ -369,21 +661,14 @@ private fun BatchRegisterBottomSheet(
     var isExpandedDetails by remember { mutableStateOf(false) }
     var memoText by remember { mutableStateOf("") }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss
-    ) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 24.dp, vertical = 16.dp)
         ) {
-            val titleText = if (selectedDates.size == 1) {
-                "${selectedDates.first()} の空き時間を設定"
-            } else {
-                "空き時間を設定 (${selectedDates.size}日)"
-            }
             Text(
-                text = titleText,
+                text = "空き時間を設定 (${selectedDates.size}日)",
                 style = MaterialTheme.typography.titleMedium
             )
             Spacer(modifier = Modifier.height(12.dp))
@@ -456,7 +741,7 @@ private fun BatchRegisterBottomSheet(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "詳細（メモや個別時間）を入力する",
+                    text = "詳細（メモ）を入力する",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.secondary
                 )
@@ -473,7 +758,7 @@ private fun BatchRegisterBottomSheet(
                 OutlinedTextField(
                     value = memoText,
                     onValueChange = { memoText = it },
-                    label = { Text("メモ（例: バイト終わってから空いてます 等）") },
+                    label = { Text("メモ（例: バイト後等）") },
                     modifier = Modifier.fillMaxWidth(),
                     maxLines = 3
                 )
@@ -481,12 +766,11 @@ private fun BatchRegisterBottomSheet(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            val buttonText = if (selectedDates.size == 1) "この日に登録する" else "選択した日に一括登録する"
             Button(
                 onClick = { onRegister(selectedSlots.toList(), memoText) },
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(text = buttonText)
+                Text(text = "選択した日に一括登録する")
             }
 
             Spacer(modifier = Modifier.height(32.dp))
