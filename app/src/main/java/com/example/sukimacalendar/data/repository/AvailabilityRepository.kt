@@ -19,7 +19,11 @@ class AvailabilityRepository {
     ): Result<Unit> = runCatching {
         val currentUser = auth.currentUser ?: throw IllegalStateException("ログインしていません")
         val userId = currentUser.uid
-        val userName = currentUser.displayName?.takeIf { it.isNotBlank() } ?: "メンバー"
+
+        // 🔴 ユーザー名の取得：displayNameが空ならメールアドレスの@前、それもダメなら「メンバー」にする
+        val userName = currentUser.displayName?.takeIf { it.isNotBlank() }
+            ?: currentUser.email?.substringBefore("@")?.takeIf { it.isNotBlank() }
+            ?: "メンバー"
 
         if (dates.isEmpty()) {
             throw IllegalStateException("日付が選択されていません")
@@ -33,7 +37,7 @@ class AvailabilityRepository {
 
             val data = mapOf(
                 "userId" to userId,
-                "userName" to userName,
+                "userName" to userName, // 👈 ここで確実に名前を保存する
                 "groupId" to groupId,
                 "date" to date,
                 "timeSlots" to timeSlots,

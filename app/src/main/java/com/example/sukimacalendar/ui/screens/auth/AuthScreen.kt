@@ -18,6 +18,7 @@ fun AuthScreen(
     val scope = rememberCoroutineScope()
 
     var userId by remember { mutableStateOf("") }
+    var userName by remember { mutableStateOf("") } // 👈 ユーザー名用の状態を追加
     var password by remember { mutableStateOf("") }
     var isSignUpMode by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
@@ -49,6 +50,18 @@ fun AuthScreen(
                 modifier = Modifier.fillMaxWidth()
             )
 
+            // 🔴 新規登録モードのときだけ「ユーザー名」の入力欄を表示する
+            if (isSignUpMode) {
+                Spacer(modifier = Modifier.height(16.dp))
+                OutlinedTextField(
+                    value = userName,
+                    onValueChange = { userName = it },
+                    label = { Text("ユーザー名（表示名）") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
             Spacer(modifier = Modifier.height(16.dp))
 
             OutlinedTextField(
@@ -73,8 +86,8 @@ fun AuthScreen(
 
             Button(
                 onClick = {
-                    if (userId.isBlank() || password.isBlank()) {
-                        errorMessage = "IDとパスワードを入力してください"
+                    if (userId.isBlank() || password.isBlank() || (isSignUpMode && userName.isBlank())) {
+                        errorMessage = "すべての項目を入力してください"
                         return@Button
                     }
                     isLoading = true
@@ -82,7 +95,7 @@ fun AuthScreen(
 
                     scope.launch {
                         val result = if (isSignUpMode) {
-                            authRepository.signUp(userId, password)
+                            authRepository.signUp(userId, password, userName) // 👈 userNameを渡す
                         } else {
                             authRepository.login(userId, password)
                         }
