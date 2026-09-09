@@ -19,6 +19,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.sukimacalendar.data.model.Group
 import com.example.sukimacalendar.data.repository.GroupRepository
 import com.example.sukimacalendar.ui.components.BottomNavBar
+import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -27,6 +28,7 @@ fun GroupScreen(currentRoute: String?, onNavigate: (String) -> Unit) {
     val groupRepository = remember { GroupRepository() }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val currentUserId = FirebaseAuth.getInstance().currentUser?.uid
 
     val groups by groupRepository.observeMyGroups()
         .collectAsStateWithLifecycle(initialValue = emptyList())
@@ -34,8 +36,8 @@ fun GroupScreen(currentRoute: String?, onNavigate: (String) -> Unit) {
     var showCreateDialog by remember { mutableStateOf(false) }
     var showJoinDialog by remember { mutableStateOf(false) }
 
-    // パスワード確認・変更ダイアログ用の状態
     var selectedGroupForDetail by remember { mutableStateOf<Group?>(null) }
+    var selectedGroupForMembers by remember { mutableStateOf<Group?>(null) }
 
     var snackbarMessage by remember { mutableStateOf<String?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
@@ -92,6 +94,9 @@ fun GroupScreen(currentRoute: String?, onNavigate: (String) -> Unit) {
                         onShowDetail = {
                             selectedGroupForDetail = group
                         },
+                        onShowMembers = {
+                            selectedGroupForMembers = group
+                        },
                         onDelete = {
                             scope.launch {
                                 groupRepository.deleteGroup(group.id)
@@ -105,15 +110,30 @@ fun GroupScreen(currentRoute: String?, onNavigate: (String) -> Unit) {
         }
     }
 
-    // グループ詳細（パスワード確認）ダイアログ
     selectedGroupForDetail?.let { group ->
         GroupDetailDialog(
             group = group,
             groupRepository = groupRepository,
             onDismiss = { selectedGroupForDetail = null },
-            onUpdated = { newPass ->
+            onUpdated = {
                 snackbarMessage = "パスワードを更新しました"
                 selectedGroupForDetail = null
+            }
+        )
+    }
+
+    selectedGroupForMembers?.let { group ->
+        GroupMembersDialog(
+            group = group,
+            groupRepository = groupRepository,
+            currentUserId = currentUserId,
+            onDismiss = { selectedGroupForMembers = null },
+            onMemberRemoved = { isMe ->
+                if (isMe) {
+                    snackbarMessage = "グループを脱退しました"
+                } else {
+                    snackbarMessage = "メンバーを削除しました"
+                }
             }
         )
     }
@@ -152,6 +172,7 @@ private fun GroupRow(
     group: Group,
     onCopyCode: () -> Unit,
     onShowDetail: () -> Unit,
+    onShowMembers: () -> Unit,
     onDelete: () -> Unit
 ) {
     var showMenu by remember { mutableStateOf(false) }
@@ -187,6 +208,13 @@ private fun GroupRow(
                         }
                     )
                     DropdownMenuItem(
+                        text = { Text("メンバー一覧・管理") },
+                        onClick = {
+                            showMenu = false
+                            onShowMembers()
+                        }
+                    )
+                    DropdownMenuItem(
                         text = { Text("パスワード確認・変更") },
                         onClick = {
                             showMenu = false
@@ -217,7 +245,6 @@ private fun GroupDetailDialog(
     var newPassword by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
 
-    // ダイアログが開いたときにFirestoreから現在のパスワードを取得する
     LaunchedEffect(group.id) {
         groupRepository.getPassword(group.id)
             .onSuccess { currentPassword = it }
@@ -258,6 +285,134 @@ private fun GroupDetailDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("キャンセル") } }
     )
+}
+
+@Composable
+private fun GroupMembersDialog(
+    group: Group,
+    groupRepository: GroupRepository,
+    currentUserId: String?,
+    onDismiss: () -> Unit,
+    onMemberRemoved: (Boolean) -> Unit
+) {
+    var members by remember { mutableStateOf<List<Map<String, String>>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+    val scope = rememberCoroutineScope()
+
+    // 確認ダイアログ用の状態（対象のメンバー情報と、それが自分自身かどうかを保持）
+    var targetMemberToRemove by remember { mutableStateOf<Map<String, String>?>(null) }
+
+    LaunchedEffect(group.id) {
+        groupRepository.getGroupMembers(group.id)
+            .onSuccess { members = it }
+        isLoading = false
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("メンバー一覧: ${group.name}") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 300.dp)
+            ) {
+                if (isLoading) {
+                    Box(modifier = Modifier.fillMaxWidth().padding(24.dp), contentAlignment = androidx.compose.ui.Alignment.Center) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                    }
+                } else if (members.isEmpty()) {
+                    Text("メンバーがいません", style = MaterialTheme.typography.bodyMedium)
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(members) { member ->
+                            val uid = member["uid"] ?: ""
+                            val name = member["name"] ?: "名無し"
+                            val isMe = (uid == currentUserId)
+
+                            Surface(
+                                shape = MaterialTheme.shapes.small,
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = if (isMe) "$name (あなた)" else name,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    // 🔴 削除ボタン、または脱退ボタンを配置して確認ダイアログを開く
+                                    TextButton(
+                                        onClick = {
+                                            targetMemberToRemove = member
+                                        }
+                                    ) {
+                                        Text(
+                                            text = if (isMe) "脱退" else "削除",
+                                            color = if (isMe) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("閉じる") }
+        }
+    )
+
+    // 🔴 削除・脱退の確認ダイアログ
+    targetMemberToRemove?.let { member ->
+        val uid = member["uid"] ?: ""
+        val name = member["name"] ?: "メンバー"
+        val isMe = (uid == currentUserId)
+
+        AlertDialog(
+            onDismissRequest = { targetMemberToRemove = null },
+            title = { Text(if (isMe) "グループの脱退" else "メンバーの削除") },
+            text = {
+                Text(if (isMe) "本当にこのグループから脱退しますか？" else "本当に「$name」をグループから削除しますか？")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        scope.launch {
+                            groupRepository.removeMember(group.id, uid)
+                                .onSuccess {
+                                    targetMemberToRemove = null
+                                    onMemberRemoved(isMe)
+                                    // 自分が脱退した場合はメンバー一覧ダイアログ自体も閉じる
+                                    if (isMe) {
+                                        onDismiss()
+                                    } else {
+                                        // 他のメンバーを削除した場合はリストを更新
+                                        members = members.filter { it["uid"] != uid }
+                                    }
+                                }
+                        }
+                    }
+                ) {
+                    Text(if (isMe) "脱退する" else "削除する", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { targetMemberToRemove = null }) {
+                    Text("キャンセル")
+                }
+            }
+        )
+    }
 }
 
 @Composable

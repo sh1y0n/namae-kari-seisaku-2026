@@ -25,6 +25,7 @@ class GroupRepository {
             return@callbackFlow
         }
 
+        // memberIds 配列に含まれているかを監視
         val registration = firestore.collection("groups")
             .whereArrayContains("memberIds", uid)
             .addSnapshotListener { snapshot, error ->
@@ -46,16 +47,22 @@ class GroupRepository {
     }
 
     /**
-     * グループを作成（6桁のランダム招待コードとパスワードを設定）
+     * グループを作成（UIDとdisplayNameを members マップリストとして保存）
      */
     suspend fun createGroup(name: String, password: String): Result<Unit> {
-        val uid = auth.currentUserId()
+        val currentUser = auth.currentUser
             ?: return Result.failure(IllegalStateException("ログインしていません"))
+        val uid = currentUser.uid
+        val userName = currentUser.displayName?.takeIf { it.isNotBlank() } ?: "メンバー"
 
         return try {
             val groupId = UUID.randomUUID().toString()
-            // 6桁のランダムな招待コードを生成
             val inviteCode = (1..6).map { "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".random() }.joinToString("")
+
+            val initialMember = mapOf(
+                "uid" to uid,
+                "name" to userName
+            )
 
             firestore.collection("groups").document(groupId)
                 .set(
@@ -64,7 +71,8 @@ class GroupRepository {
                         "inviteCode" to inviteCode,
                         "password" to password,
                         "ownerId" to uid,
-                        "memberIds" to listOf(uid)
+                        "memberIds" to listOf(uid),
+                        "members" to listOf(initialMember) // 👈 名前をセットで保存
                     )
                 )
                 .await()
@@ -75,11 +83,13 @@ class GroupRepository {
     }
 
     /**
-     * 6桁の招待コードとパスワードを指定してグループに参加する
+     * 招待コードでグループに参加（自分の displayName も members に追加）
      */
     suspend fun joinGroupWithCode(inviteCode: String, inputPassword: String): Result<Unit> {
-        val uid = auth.currentUserId()
+        val currentUser = auth.currentUser
             ?: return Result.failure(IllegalStateException("ログインしていません"))
+        val uid = currentUser.uid
+        val userName = currentUser.displayName?.takeIf { it.isNotBlank() } ?: "メンバー"
 
         return try {
             val querySnapshot = firestore.collection("groups")
@@ -102,9 +112,18 @@ class GroupRepository {
             firestore.runTransaction { transaction ->
                 val snapshot = transaction.get(docRef)
                 val memberIds = snapshot.get("memberIds") as? List<String> ?: emptyList()
+
+                @Suppress("UNCHECKED_CAST")
+                val members = snapshot.get("members") as? List<Map<String, String>> ?: emptyList()
+
                 if (!memberIds.contains(uid)) {
                     val newMemberIds = memberIds + uid
-                    transaction.update(docRef, "memberIds", newMemberIds)
+                    val newMembers = members + mapOf("uid" to uid, "name" to userName)
+
+                    transaction.update(docRef, mapOf(
+                        "memberIds" to newMemberIds,
+                        "members" to newMembers
+                    ))
                 }
             }.await()
 
@@ -127,7 +146,7 @@ class GroupRepository {
     }
 
     /**
-     * グループのパスワードを取得する
+     * パスワード取得
      */
     suspend fun getPassword(groupId: String): Result<String> {
         return try {
@@ -140,13 +159,64 @@ class GroupRepository {
     }
 
     /**
-     * グループのパスワードを変更する
+     * パスワード変更
      */
     suspend fun updatePassword(groupId: String, newPassword: String): Result<Unit> {
         return try {
             firestore.collection("groups").document(groupId)
                 .update("password", newPassword)
                 .await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * グループのメンバー一覧（保存されている name 付きのマップリスト）を取得
+     */
+    suspend fun getGroupMembers(groupId: String): Result<List<Map<String, String>>> {
+        return try {
+            val doc = firestore.collection("groups").document(groupId).get().await()
+            @Suppress("UNCHECKED_CAST")
+            val members = doc.get("members") as? List<Map<String, String>> ?: emptyList()
+
+            // 万が一古いグループで members フィールドがない場合のフォールバック
+            if (members.isEmpty()) {
+                val memberIds = doc.get("memberIds") as? List<String> ?: emptyList()
+                val fallbackMembers = memberIds.map { uid ->
+                    mapOf("uid" to uid, "name" to "メンバー (${uid.take(4)})")
+                }
+                return Result.success(fallbackMembers)
+            }
+
+            Result.success(members)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * メンバー削除（memberIds と members の両方から除外）
+     */
+    suspend fun removeMember(groupId: String, userId: String): Result<Unit> {
+        return try {
+            val docRef = firestore.collection("groups").document(groupId)
+            firestore.runTransaction { transaction ->
+                val snapshot = transaction.get(docRef)
+                val memberIds = snapshot.get("memberIds") as? List<String> ?: emptyList()
+
+                @Suppress("UNCHECKED_CAST")
+                val members = snapshot.get("members") as? List<Map<String, String>> ?: emptyList()
+
+                val newMemberIds = memberIds.filter { it != userId }
+                val newMembers = members.filter { it["uid"] != userId }
+
+                transaction.update(docRef, mapOf(
+                    "memberIds" to newMemberIds,
+                    "members" to newMembers
+                ))
+            }.await()
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
