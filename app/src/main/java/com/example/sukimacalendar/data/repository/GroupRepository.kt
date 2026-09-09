@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
 import java.util.UUID
 
+
 class GroupRepository {
 
     private val auth = FirebaseAuth.getInstance()
@@ -34,10 +35,14 @@ class GroupRepository {
                     return@addSnapshotListener
                 }
                 val groups = snapshot?.documents?.map { doc ->
+                    @Suppress("UNCHECKED_CAST")
+                    val membersList = doc.get("members") as? List<Map<String, String>> ?: emptyList()
+
                     Group(
                         id = doc.id,
                         name = doc.getString("name") ?: "",
-                        inviteCode = doc.getString("inviteCode") ?: ""
+                        inviteCode = doc.getString("inviteCode") ?: "",
+                        members = membersList
                     )
                 } ?: emptyList()
                 trySend(groups)
@@ -72,7 +77,7 @@ class GroupRepository {
                         "password" to password,
                         "ownerId" to uid,
                         "memberIds" to listOf(uid),
-                        "members" to listOf(initialMember) // 👈 名前をセットで保存
+                        "members" to listOf(initialMember)
                     )
                 )
                 .await()
@@ -181,7 +186,6 @@ class GroupRepository {
             @Suppress("UNCHECKED_CAST")
             val members = doc.get("members") as? List<Map<String, String>> ?: emptyList()
 
-            // 万が一古いグループで members フィールドがない場合のフォールバック
             if (members.isEmpty()) {
                 val memberIds = doc.get("memberIds") as? List<String> ?: emptyList()
                 val fallbackMembers = memberIds.map { uid ->
@@ -223,5 +227,3 @@ class GroupRepository {
         }
     }
 }
-
-private fun FirebaseAuth.currentUserId(): String? = this.currentUser?.uid

@@ -3,13 +3,7 @@ package com.example.sukimacalendar.data.model
 // ===============================================
 // Models.kt
 // 役割: 画面をダミーデータで動かすための最小限のデータ構造。
-//      今はFirestoreと繋がっていないので、
-//      各画面ではここで定義したダミーデータ(sampleGroups等)を仮表示に使う。
-//      後でFirestoreと連携するときは、このクラスの形をコレクションの
-//      ドキュメント構造に合わせて調整して使い回す想定。
 // ===============================================
-
-
 
 // 朝・昼・夜の3枠。PPTXの「この日の空き時間」の選択肢そのもの。
 enum class TimeSlot(val label: String) {
@@ -31,11 +25,5 @@ val sampleGroups = listOf(
 
 val sampleAvailability = listOf(
     MemberAvailability("よしとう", listOf(TimeSlot.NIGHT)),
-    MemberAvailability("かたな", listOf(TimeSlot.MORNING, TimeSlot.AFTERNOON, TimeSlot.NIGHT)) // 「一日」= 全枠
-)
-
-data class Group(
-    val id: String,
-    val name: String,
-    val inviteCode: String = "" // ←ここにこれを追加
+    MemberAvailability("かたな", listOf(TimeSlot.MORNING, TimeSlot.AFTERNOON, TimeSlot.NIGHT))
 )

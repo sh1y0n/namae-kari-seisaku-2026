@@ -53,6 +53,8 @@ fun CalendarMainScreen(
 
     val currentGroup = groups.getOrNull(selectedGroupIndex) ?: groups.firstOrNull()
     val currentGroupId = currentGroup?.id ?: ""
+    // 🔴 グループの総メンバー数を取得（modelのGroup.membersのサイズ）
+    val totalGroupMembersCount = currentGroup?.members?.size ?: 1
 
     val groupAvailabilities by availabilityRepository.observeAvailabilitiesForGroup(currentGroupId)
         .collectAsStateWithLifecycle(initialValue = emptyList())
@@ -157,6 +159,7 @@ fun CalendarMainScreen(
                     selectedDates = selectedDates,
                     availabilitiesByDate = availabilitiesByDate,
                     currentUserId = currentUserId,
+                    totalGroupMembersCount = totalGroupMembersCount,
                     onDayClick = { day ->
                         val dateStr = "${targetYearMonth.year}年${targetYearMonth.monthValue}月${day}日"
                         if (isMultiSelectMode) {
@@ -190,6 +193,7 @@ fun CalendarMainScreen(
             dateStr = clickedDateForDetail,
             dayAvailabilities = dayAvailabilities,
             currentUserId = currentUserId,
+            totalGroupMembersCount = totalGroupMembersCount,
             initialSlots = (myAvailability?.get("timeSlots") as? List<*>)?.mapNotNull { it as? String } ?: emptyList(),
             initialMemo = (myAvailability?.get("memo") as? String) ?: "",
             onDismiss = { showDayDetailSheet = false },
@@ -273,6 +277,7 @@ private fun MonthGrid(
     selectedDates: Set<String>,
     availabilitiesByDate: Map<String, List<Map<String, Any>>>,
     currentUserId: String?,
+    totalGroupMembersCount: Int,
     onDayClick: (Int) -> Unit,
     onDayLongClick: (Int) -> Unit
 ) {
@@ -340,13 +345,14 @@ private fun MonthGrid(
 
                                 val dayAvailabilities = availabilitiesByDate[dateStr] ?: emptyList()
                                 val isMyRegistered = dayAvailabilities.any { it["userId"] == currentUserId }
-                                val otherAvailabilities = dayAvailabilities.filter { it["userId"] != currentUserId }
+                                val registeredCount = dayAvailabilities.size
 
                                 DayCell(
                                     day = cellDay,
                                     isSelected = isSelected,
                                     isMyRegistered = isMyRegistered,
-                                    otherAvailabilities = otherAvailabilities,
+                                    registeredCount = registeredCount,
+                                    totalCount = totalGroupMembersCount,
                                     onClick = { onDayClick(cellDay) },
                                     onLongClick = { onDayLongClick(cellDay) }
                                 )
@@ -379,12 +385,16 @@ private fun DayCell(
     day: Int,
     isSelected: Boolean,
     isMyRegistered: Boolean,
-    otherAvailabilities: List<Map<String, Any>>,
+    registeredCount: Int,
+    totalCount: Int,
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
+    val isAllMatched = (registeredCount >= totalCount && totalCount > 0)
+
     val backgroundColor = when {
-        isSelected -> SukimaLavender.copy(alpha = 0.5f)
+        isSelected -> SukimaLavender.copy(alpha = 0.6f)
+        isAllMatched -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.8f)
         isMyRegistered -> SukimaLavender.copy(alpha = 0.3f)
         else -> SukimaSurfaceGray
     }
@@ -392,6 +402,7 @@ private fun DayCell(
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .clip(RoundedCornerShape(4.dp))
             .background(backgroundColor)
             .combinedClickable(
                 onClick = onClick,
@@ -405,34 +416,14 @@ private fun DayCell(
         ) {
             Text(text = day.toString(), style = MaterialTheme.typography.bodyLarge)
 
-            if (otherAvailabilities.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(2.dp))
-                val maxVisibleDots = 3
-                val visibleItems = otherAvailabilities.take(maxVisibleDots)
-                val remainingCount = otherAvailabilities.size - maxVisibleDots
+            Spacer(modifier = Modifier.weight(1f))
 
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    visibleItems.forEach { item ->
-                        val uid = item["userId"] as? String ?: ""
-                        val dotColor = getMemberColor(uid)
-                        Box(
-                            modifier = Modifier
-                                .size(5.dp)
-                                .clip(CircleShape)
-                                .background(dotColor)
-                        )
-                    }
-                    if (remainingCount > 0) {
-                        Text(
-                            text = "+$remainingCount",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
+            if (registeredCount > 0) {
+                Text(
+                    text = "$registeredCount/$totalCount",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (isAllMatched) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.secondary
+                )
             }
         }
     }
@@ -444,6 +435,7 @@ private fun DayDetailBottomSheet(
     dateStr: String,
     dayAvailabilities: List<Map<String, Any>>,
     currentUserId: String?,
+    totalGroupMembersCount: Int,
     initialSlots: List<String>,
     initialMemo: String,
     onDismiss: () -> Unit,
@@ -451,8 +443,21 @@ private fun DayDetailBottomSheet(
 ) {
     var selectedSlots by remember { mutableStateOf(if (initialSlots.isNotEmpty()) initialSlots.toSet() else setOf("一日")) }
     var memoText by remember { mutableStateOf(initialMemo) }
-    // 🔴 初期状態を閉じた状態（false）にする
     var isEditExpanded by remember { mutableStateOf(false) }
+
+    val totalMembersCount = dayAvailabilities.size
+    val morningCount = dayAvailabilities.count { avail ->
+        val slots = (avail["timeSlots"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+        slots.contains("一日") || slots.contains("朝")
+    }
+    val afternoonCount = dayAvailabilities.count { avail ->
+        val slots = (avail["timeSlots"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+        slots.contains("一日") || slots.contains("昼")
+    }
+    val nightCount = dayAvailabilities.count { avail ->
+        val slots = (avail["timeSlots"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+        slots.contains("一日") || slots.contains("夜")
+    }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
@@ -463,7 +468,29 @@ private fun DayDetailBottomSheet(
             Text(text = dateStr, style = MaterialTheme.typography.titleMedium)
             Spacer(modifier = Modifier.height(10.dp))
 
-            Text(text = "メンバーの空き状況 (${dayAvailabilities.size}人)", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+            if (totalGroupMembersCount > 0) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = SukimaSurfaceGray,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text(text = "時間帯別の空き人数（スキマ合致度）", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            TimeSlotBarItem(label = "朝", count = morningCount, total = totalGroupMembersCount, modifier = Modifier.weight(1f))
+                            TimeSlotBarItem(label = "昼", count = afternoonCount, total = totalGroupMembersCount, modifier = Modifier.weight(1f))
+                            TimeSlotBarItem(label = "夜", count = nightCount, total = totalGroupMembersCount, modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+            }
+
+            Text(text = "メンバーの空き状況 (${totalMembersCount}人)", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
             Spacer(modifier = Modifier.height(6.dp))
 
             if (dayAvailabilities.isEmpty()) {
@@ -544,7 +571,6 @@ private fun DayDetailBottomSheet(
             HorizontalDivider()
             Spacer(modifier = Modifier.height(12.dp))
 
-            // 🔴 タップしてアコーディオンの開閉を切り替える部分
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -566,7 +592,6 @@ private fun DayDetailBottomSheet(
                 }
             }
 
-            // 🔴 isEditExpandedがtrueのときだけ表示する
             if (isEditExpanded) {
                 Spacer(modifier = Modifier.height(8.dp))
 
@@ -604,7 +629,12 @@ private fun DayDetailBottomSheet(
                                     val next = selectedSlots - slot
                                     if (next.isEmpty()) setOf("一日") else next
                                 } else {
-                                    (selectedSlots - "一日") + slot
+                                    val currentSubSlots = (selectedSlots - "一日") + slot
+                                    if (currentSubSlots.size >= 3) {
+                                        setOf("一日")
+                                    } else {
+                                        currentSubSlots
+                                    }
                                 }
                             },
                             shape = RoundedCornerShape(8.dp),
@@ -646,6 +676,28 @@ private fun DayDetailBottomSheet(
             }
 
             Spacer(modifier = Modifier.height(24.dp))
+        }
+    }
+}
+
+@Composable
+private fun TimeSlotBarItem(label: String, count: Int, total: Int, modifier: Modifier = Modifier) {
+    val isAllMatch = (count == total && total > 0)
+    val backgroundColor = if (isAllMatch) MaterialTheme.colorScheme.primaryContainer else SukimaSurfaceGray
+    val contentColor = if (isAllMatch) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+
+    Surface(
+        shape = RoundedCornerShape(6.dp),
+        color = backgroundColor,
+        modifier = modifier
+    ) {
+        Column(
+            modifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(text = label, style = MaterialTheme.typography.labelSmall, color = contentColor)
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(text = "$count / $total 人", style = MaterialTheme.typography.bodySmall, color = contentColor)
         }
     }
 }
@@ -710,7 +762,12 @@ private fun BatchRegisterBottomSheet(
                                 val next = selectedSlots - slot
                                 if (next.isEmpty()) setOf("一日") else next
                             } else {
-                                (selectedSlots - "一日") + slot
+                                val currentSubSlots = (selectedSlots - "一日") + slot
+                                if (currentSubSlots.size >= 3) {
+                                    setOf("一日")
+                                } else {
+                                    currentSubSlots
+                                }
                             }
                         },
                         shape = RoundedCornerShape(8.dp),

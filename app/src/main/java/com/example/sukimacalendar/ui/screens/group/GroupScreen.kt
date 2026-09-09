@@ -299,7 +299,6 @@ private fun GroupMembersDialog(
     var isLoading by remember { mutableStateOf(true) }
     val scope = rememberCoroutineScope()
 
-    // 確認ダイアログ用の状態（対象のメンバー情報と、それが自分自身かどうかを保持）
     var targetMemberToRemove by remember { mutableStateOf<Map<String, String>?>(null) }
 
     LaunchedEffect(group.id) {
@@ -349,7 +348,6 @@ private fun GroupMembersDialog(
                                         text = if (isMe) "$name (あなた)" else name,
                                         style = MaterialTheme.typography.bodyMedium
                                     )
-                                    // 🔴 削除ボタン、または脱退ボタンを配置して確認ダイアログを開く
                                     TextButton(
                                         onClick = {
                                             targetMemberToRemove = member
@@ -372,7 +370,6 @@ private fun GroupMembersDialog(
         }
     )
 
-    // 🔴 削除・脱退の確認ダイアログ
     targetMemberToRemove?.let { member ->
         val uid = member["uid"] ?: ""
         val name = member["name"] ?: "メンバー"
@@ -392,11 +389,9 @@ private fun GroupMembersDialog(
                                 .onSuccess {
                                     targetMemberToRemove = null
                                     onMemberRemoved(isMe)
-                                    // 自分が脱退した場合はメンバー一覧ダイアログ自体も閉じる
                                     if (isMe) {
                                         onDismiss()
                                     } else {
-                                        // 他のメンバーを削除した場合はリストを更新
                                         members = members.filter { it["uid"] != uid }
                                     }
                                 }
