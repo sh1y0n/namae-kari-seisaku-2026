@@ -20,7 +20,6 @@ class AvailabilityRepository {
         val currentUser = auth.currentUser ?: throw IllegalStateException("ログインしていません")
         val userId = currentUser.uid
 
-        // 🔴 ユーザー名の取得：displayNameが空ならメールアドレスの@前、それもダメなら「メンバー」にする
         val userName = currentUser.displayName?.takeIf { it.isNotBlank() }
             ?: currentUser.email?.substringBefore("@")?.takeIf { it.isNotBlank() }
             ?: "メンバー"
@@ -37,7 +36,7 @@ class AvailabilityRepository {
 
             val data = mapOf(
                 "userId" to userId,
-                "userName" to userName, // 👈 ここで確実に名前を保存する
+                "userName" to userName,
                 "groupId" to groupId,
                 "date" to date,
                 "timeSlots" to timeSlots,
@@ -45,6 +44,27 @@ class AvailabilityRepository {
                 "createdAt" to com.google.firebase.Timestamp.now()
             )
             batch.set(docRef, data)
+        }
+
+        batch.commit().await()
+    }
+
+    // 複数のユーザーIDと日付を指定して、空きデータをまとめて削除する（予定確定時用）
+    suspend fun deleteAvailabilitiesForUsers(
+        groupId: String,
+        userIds: List<String>,
+        dates: Set<String>
+    ): Result<Unit> = runCatching {
+        if (dates.isEmpty() || userIds.isEmpty()) return@runCatching
+
+        val batch = firestore.batch()
+
+        userIds.forEach { userId ->
+            dates.forEach { date ->
+                val docId = "${userId}_${groupId}_${date}"
+                val docRef = firestore.collection("availabilities").document(docId)
+                batch.delete(docRef)
+            }
         }
 
         batch.commit().await()

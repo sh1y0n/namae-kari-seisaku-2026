@@ -27,3 +27,17 @@ val sampleAvailability = listOf(
     MemberAvailability("よしとう", listOf(TimeSlot.NIGHT)),
     MemberAvailability("かたな", listOf(TimeSlot.MORNING, TimeSlot.AFTERNOON, TimeSlot.NIGHT))
 )
+
+data class Invite(
+    val id: String = "",
+    val fromUserId: String = "",
+    val groupId: String = "",
+    val groupName: String = "",
+    val date: String = "",
+    val targetUids: List<String> = emptyList(),
+    val message: String = "",
+    val createdAt: com.google.firebase.Timestamp? = null,
+    val timeSlots: List<String> = emptyList(),
+    val fromUserName: String = "",
+)
+

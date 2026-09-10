@@ -2,6 +2,7 @@ package com.example.sukimacalendar.ui.screens.calendar
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -27,10 +28,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.sukimacalendar.data.model.Group
 import com.example.sukimacalendar.data.repository.AvailabilityRepository
 import com.example.sukimacalendar.data.repository.GroupRepository
+import com.example.sukimacalendar.data.repository.InviteRepository
 import com.example.sukimacalendar.ui.components.BottomNavBar
 import com.example.sukimacalendar.ui.theme.SukimaLavender
 import com.example.sukimacalendar.ui.theme.SukimaSurfaceGray
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.launch
 import java.time.YearMonth
 
@@ -45,15 +48,19 @@ fun CalendarMainScreen(
 
     val groupRepository = remember { GroupRepository() }
     val availabilityRepository = remember { AvailabilityRepository() }
+    val inviteRepository = remember { InviteRepository() }
     val scope = rememberCoroutineScope()
     val currentUserId = FirebaseAuth.getInstance().currentUser?.uid
 
     val groups by groupRepository.observeMyGroups()
         .collectAsStateWithLifecycle(initialValue = emptyList())
 
+    val myInvites by inviteRepository.observeMyInvites()
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+    val hasUnreadInvites = myInvites.isNotEmpty()
+
     val currentGroup = groups.getOrNull(selectedGroupIndex) ?: groups.firstOrNull()
     val currentGroupId = currentGroup?.id ?: ""
-    // 🔴 グループの総メンバー数を取得（modelのGroup.membersのサイズ）
     val totalGroupMembersCount = currentGroup?.members?.size ?: 1
 
     val groupAvailabilities by availabilityRepository.observeAvailabilitiesForGroup(currentGroupId)
@@ -113,7 +120,15 @@ fun CalendarMainScreen(
                         }
                     } else {
                         IconButton(onClick = onOpenNotification) {
-                            Icon(Icons.Filled.Notifications, contentDescription = "通知")
+                            BadgedBox(
+                                badge = {
+                                    if (hasUnreadInvites) {
+                                        Badge()
+                                    }
+                                }
+                            ) {
+                                Icon(Icons.Filled.Notifications, contentDescription = "通知")
+                            }
                         }
                     }
                 }
@@ -159,7 +174,7 @@ fun CalendarMainScreen(
                     selectedDates = selectedDates,
                     availabilitiesByDate = availabilitiesByDate,
                     currentUserId = currentUserId,
-                    totalGroupMembersCount = totalGroupMembersCount,
+                    totalCount = totalGroupMembersCount,
                     onDayClick = { day ->
                         val dateStr = "${targetYearMonth.year}年${targetYearMonth.monthValue}月${day}日"
                         if (isMultiSelectMode) {
@@ -194,6 +209,7 @@ fun CalendarMainScreen(
             dayAvailabilities = dayAvailabilities,
             currentUserId = currentUserId,
             totalGroupMembersCount = totalGroupMembersCount,
+            currentGroup = currentGroup,
             initialSlots = (myAvailability?.get("timeSlots") as? List<*>)?.mapNotNull { it as? String } ?: emptyList(),
             initialMemo = (myAvailability?.get("memo") as? String) ?: "",
             onDismiss = { showDayDetailSheet = false },
@@ -212,6 +228,32 @@ fun CalendarMainScreen(
                     }
                 }
                 showDayDetailSheet = false
+            },
+            onSendInvite = { targetUids, timeSlots, message ->
+                scope.launch {
+                    if (currentUserId == null || currentGroup == null) return@launch
+                    val myName = currentGroup.members.find { it["uid"] == currentUserId }?.get("name") ?: "メンバー"
+
+                    val inviteData = mapOf(
+                        "fromUserId" to currentUserId,
+                        "fromUserName" to myName,
+                        "groupId" to currentGroup.id,
+                        "groupName" to currentGroup.name,
+                        "date" to clickedDateForDetail,
+                        "timeSlots" to timeSlots,
+                        "targetUids" to targetUids,
+                        "message" to message,
+                        "createdAt" to com.google.firebase.Timestamp.now()
+                    )
+                    FirebaseFirestore.getInstance().collection("invites")
+                        .add(inviteData)
+                        .addOnSuccessListener {
+                            snackbarMessage = "お誘いを送信しました！"
+                        }
+                        .addOnFailureListener { e ->
+                            snackbarMessage = "送信に失敗しました: ${e.localizedMessage}"
+                        }
+                }
             }
         )
     }
@@ -277,26 +319,20 @@ private fun MonthGrid(
     selectedDates: Set<String>,
     availabilitiesByDate: Map<String, List<Map<String, Any>>>,
     currentUserId: String?,
-    totalGroupMembersCount: Int,
+    totalCount: Int,
     onDayClick: (Int) -> Unit,
     onDayLongClick: (Int) -> Unit
 ) {
     val weekLabels = listOf("日", "月", "火", "水", "木", "金", "土")
-
     val firstDayOfWeek = yearMonth.atDay(1).dayOfWeek
     val startDayOffset = firstDayOfWeek.value % 7
     val daysInMonth = yearMonth.lengthOfMonth()
 
     val calendarCells = buildList {
         repeat(startDayOffset) { add(null) }
-        for (day in 1..daysInMonth) {
-            add(day)
-        }
-        while (size % 7 != 0) {
-            add(null)
-        }
+        for (day in 1..daysInMonth) { add(day) }
+        while (size % 7 != 0) { add(null) }
     }
-
     val weeks = calendarCells.chunked(7)
 
     Column(
@@ -352,7 +388,7 @@ private fun MonthGrid(
                                     isSelected = isSelected,
                                     isMyRegistered = isMyRegistered,
                                     registeredCount = registeredCount,
-                                    totalCount = totalGroupMembersCount,
+                                    totalCount = totalCount,
                                     onClick = { onDayClick(cellDay) },
                                     onLongClick = { onDayLongClick(cellDay) }
                                 )
@@ -366,12 +402,8 @@ private fun MonthGrid(
 }
 
 private val memberColors = listOf(
-    Color(0xFFE57373),
-    Color(0xFF81C784),
-    Color(0xFF64B5F6),
-    Color(0xFFFFB74D),
-    Color(0xFFBA68C8),
-    Color(0xFF4DB6AC)
+    Color(0xFFE57373), Color(0xFF81C784), Color(0xFF64B5F6),
+    Color(0xFFFFB74D), Color(0xFFBA68C8), Color(0xFF4DB6AC)
 )
 
 private fun getMemberColor(userId: String): Color {
@@ -391,7 +423,6 @@ private fun DayCell(
     onLongClick: () -> Unit
 ) {
     val isAllMatched = (registeredCount >= totalCount && totalCount > 0)
-
     val backgroundColor = when {
         isSelected -> SukimaLavender.copy(alpha = 0.6f)
         isAllMatched -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.8f)
@@ -404,10 +435,7 @@ private fun DayCell(
             .fillMaxSize()
             .clip(RoundedCornerShape(4.dp))
             .background(backgroundColor)
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongClick
-            ),
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
         contentAlignment = Alignment.TopCenter
     ) {
         Column(
@@ -415,9 +443,7 @@ private fun DayCell(
             modifier = Modifier.padding(4.dp)
         ) {
             Text(text = day.toString(), style = MaterialTheme.typography.bodyLarge)
-
             Spacer(modifier = Modifier.weight(1f))
-
             if (registeredCount > 0) {
                 Text(
                     text = "$registeredCount/$totalCount",
@@ -429,23 +455,25 @@ private fun DayCell(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DayDetailBottomSheet(
     dateStr: String,
     dayAvailabilities: List<Map<String, Any>>,
     currentUserId: String?,
     totalGroupMembersCount: Int,
+    currentGroup: Group?,
     initialSlots: List<String>,
     initialMemo: String,
     onDismiss: () -> Unit,
-    onSave: (List<String>, String) -> Unit
+    onSave: (List<String>, String) -> Unit,
+    onSendInvite: (List<String>, List<String>, String) -> Unit
 ) {
     var selectedSlots by remember { mutableStateOf(if (initialSlots.isNotEmpty()) initialSlots.toSet() else setOf("一日")) }
     var memoText by remember { mutableStateOf(initialMemo) }
     var isEditExpanded by remember { mutableStateOf(false) }
+    var showInviteDialog by remember { mutableStateOf(false) }
 
-    val totalMembersCount = dayAvailabilities.size
     val morningCount = dayAvailabilities.count { avail ->
         val slots = (avail["timeSlots"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
         slots.contains("一日") || slots.contains("朝")
@@ -465,7 +493,19 @@ private fun DayDetailBottomSheet(
                 .fillMaxWidth()
                 .padding(horizontal = 24.dp, vertical = 16.dp)
         ) {
-            Text(text = dateStr, style = MaterialTheme.typography.titleMedium)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(text = dateStr, style = MaterialTheme.typography.titleMedium)
+                OutlinedButton(
+                    onClick = { showInviteDialog = true },
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                ) {
+                    Text("この日に誘う", style = MaterialTheme.typography.labelMedium)
+                }
+            }
             Spacer(modifier = Modifier.height(10.dp))
 
             if (totalGroupMembersCount > 0) {
@@ -490,7 +530,7 @@ private fun DayDetailBottomSheet(
                 Spacer(modifier = Modifier.height(10.dp))
             }
 
-            Text(text = "メンバーの空き状況 (${totalMembersCount}人)", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+            Text(text = "メンバーの空き状況 (${dayAvailabilities.size}人)", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
             Spacer(modifier = Modifier.height(6.dp))
 
             if (dayAvailabilities.isEmpty()) {
@@ -512,7 +552,7 @@ private fun DayDetailBottomSheet(
                 ) {
                     items(dayAvailabilities) { item ->
                         val uid = item["userId"] as? String ?: ""
-                        val userName = item["userName"] as? String ?: "メンバー (${uid.take(4)})"
+                        val userName = item["userName"] as? String ?: "メンバー"
                         val slots = (item["timeSlots"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
                         val memo = item["memo"] as? String ?: ""
                         val isMe = (uid == currentUserId)
@@ -574,7 +614,7 @@ private fun DayDetailBottomSheet(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .combinedClickable(onClick = { isEditExpanded = !isEditExpanded })
+                    .clickable { isEditExpanded = !isEditExpanded }
                     .padding(vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -594,7 +634,6 @@ private fun DayDetailBottomSheet(
 
             if (isEditExpanded) {
                 Spacer(modifier = Modifier.height(8.dp))
-
                 val isOneDaySelected = selectedSlots.contains("一日")
                 Surface(
                     onClick = { selectedSlots = setOf("一日") },
@@ -602,26 +641,16 @@ private fun DayDetailBottomSheet(
                     color = if (isOneDaySelected) MaterialTheme.colorScheme.primaryContainer else SukimaSurfaceGray,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Box(
-                        modifier = Modifier.padding(vertical = 8.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "一日",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (isOneDaySelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
-                        )
+                    Box(modifier = Modifier.padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
+                        Text(text = "一日", style = MaterialTheme.typography.bodyMedium)
                     }
                 }
-
                 Spacer(modifier = Modifier.height(6.dp))
-
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    val subSlots = listOf("朝", "昼", "夜")
-                    subSlots.forEach { slot ->
+                    listOf("朝", "昼", "夜").forEach { slot ->
                         val isSelected = selectedSlots.contains(slot)
                         Surface(
                             onClick = {
@@ -630,7 +659,7 @@ private fun DayDetailBottomSheet(
                                     if (next.isEmpty()) setOf("一日") else next
                                 } else {
                                     val currentSubSlots = (selectedSlots - "一日") + slot
-                                    if (currentSubSlots.size >= 3) {
+                                    if (currentSubSlots.containsAll(listOf("朝", "昼", "夜"))) {
                                         setOf("一日")
                                     } else {
                                         currentSubSlots
@@ -641,22 +670,13 @@ private fun DayDetailBottomSheet(
                             color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else SukimaSurfaceGray,
                             modifier = Modifier.weight(1f)
                         ) {
-                            Box(
-                                modifier = Modifier.padding(vertical = 6.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = slot,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
-                                )
+                            Box(modifier = Modifier.padding(vertical = 6.dp), contentAlignment = Alignment.Center) {
+                                Text(text = slot, style = MaterialTheme.typography.bodyMedium)
                             }
                         }
                     }
                 }
-
                 Spacer(modifier = Modifier.height(8.dp))
-
                 OutlinedTextField(
                     value = memoText,
                     onValueChange = { memoText = it },
@@ -664,9 +684,7 @@ private fun DayDetailBottomSheet(
                     modifier = Modifier.fillMaxWidth(),
                     maxLines = 2
                 )
-
                 Spacer(modifier = Modifier.height(12.dp))
-
                 Button(
                     onClick = { onSave(selectedSlots.toList(), memoText) },
                     modifier = Modifier.fillMaxWidth()
@@ -674,9 +692,160 @@ private fun DayDetailBottomSheet(
                     Text(text = "この内容で保存・更新する")
                 }
             }
-
             Spacer(modifier = Modifier.height(24.dp))
         }
+    }
+
+    if (showInviteDialog && currentGroup != null) {
+        val groupMembers = currentGroup.members.filter { it["uid"] != currentUserId }
+        var selectedUids by remember { mutableStateOf(groupMembers.map { it["uid"] ?: "" }.toSet()) }
+        var inviteSlots by remember { mutableStateOf(setOf("一日")) }
+        var inviteMessage by remember { mutableStateOf("この日空いてるから遊ぼう！") }
+
+        AlertDialog(
+            onDismissRequest = { showInviteDialog = false },
+            title = { Text("$dateStr に誘う") },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 450.dp)
+                ) {
+                    Text("時間帯を選択", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    // 「一日」ボタンも他の部分と同様に置くか、Chipでまとめる形に合わせる
+                    val isOneDaySelected = inviteSlots.contains("一日")
+                    Surface(
+                        onClick = { inviteSlots = setOf("一日") },
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (isOneDaySelected) MaterialTheme.colorScheme.primaryContainer else SukimaSurfaceGray,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Box(modifier = Modifier.padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
+                            Text(text = "一日", style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf("朝", "昼", "夜").forEach { slot ->
+                            val isSelected = inviteSlots.contains(slot)
+                            Surface(
+                                onClick = {
+                                    inviteSlots = if (isSelected) {
+                                        val next = inviteSlots - slot
+                                        if (next.isEmpty()) setOf("一日") else next
+                                    } else {
+                                        val currentSubSlots = (inviteSlots - "一日") + slot
+                                        if (currentSubSlots.containsAll(listOf("朝", "昼", "夜"))) {
+                                            setOf("一日")
+                                        } else {
+                                            currentSubSlots
+                                        }
+                                    }
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else SukimaSurfaceGray,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Box(modifier = Modifier.padding(vertical = 6.dp), contentAlignment = Alignment.Center) {
+                                    Text(text = slot, style = MaterialTheme.typography.bodyMedium)
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    HorizontalDivider()
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Text("送信先のメンバーを選択", style = MaterialTheme.typography.labelMedium)
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("全員選択 (${groupMembers.size}人)", style = MaterialTheme.typography.bodySmall)
+                        Checkbox(
+                            checked = selectedUids.size == groupMembers.size && groupMembers.isNotEmpty(),
+                            onCheckedChange = { checked ->
+                                selectedUids = if (checked) {
+                                    groupMembers.map { it["uid"] ?: "" }.toSet()
+                                } else {
+                                    emptySet()
+                                }
+                            }
+                        )
+                    }
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 120.dp)
+                    ) {
+                        items(groupMembers) { member ->
+                            val uid = member["uid"] ?: ""
+                            val name = member["name"] ?: "メンバー"
+                            val isChecked = selectedUids.contains(uid)
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(name, style = MaterialTheme.typography.bodyMedium)
+                                Checkbox(
+                                    checked = isChecked,
+                                    onCheckedChange = { checked ->
+                                        selectedUids = if (checked) {
+                                            selectedUids + uid
+                                        } else {
+                                            selectedUids - uid
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = inviteMessage,
+                        onValueChange = { inviteMessage = it },
+                        label = { Text("メッセージ（任意）") },
+                        modifier = Modifier.fillMaxWidth(),
+                        maxLines = 2
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (selectedUids.isNotEmpty()) {
+                            onSendInvite(selectedUids.toList(), inviteSlots.toList(), inviteMessage)
+                            showInviteDialog = false
+                            onDismiss()
+                        }
+                    },
+                    enabled = selectedUids.isNotEmpty()
+                ) {
+                    Text("お誘いを送信")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showInviteDialog = false }) {
+                    Text("キャンセル")
+                }
+            }
+        )
     }
 }
 
@@ -702,7 +871,7 @@ private fun TimeSlotBarItem(label: String, count: Int, total: Int, modifier: Mod
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun BatchRegisterBottomSheet(
     selectedDates: Set<String>,
@@ -710,7 +879,6 @@ private fun BatchRegisterBottomSheet(
     onRegister: (List<String>, String) -> Unit
 ) {
     var selectedSlots by remember { mutableStateOf(setOf("一日")) }
-    var isExpandedDetails by remember { mutableStateOf(false) }
     var memoText by remember { mutableStateOf("") }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -719,12 +887,8 @@ private fun BatchRegisterBottomSheet(
                 .fillMaxWidth()
                 .padding(horizontal = 24.dp, vertical = 16.dp)
         ) {
-            Text(
-                text = "空き時間を設定 (${selectedDates.size}日)",
-                style = MaterialTheme.typography.titleMedium
-            )
+            Text(text = "空き時間を設定 (${selectedDates.size}日)", style = MaterialTheme.typography.titleMedium)
             Spacer(modifier = Modifier.height(12.dp))
-
             Text(text = "時間帯を選択", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
             Spacer(modifier = Modifier.height(8.dp))
 
@@ -735,26 +899,16 @@ private fun BatchRegisterBottomSheet(
                 color = if (isOneDaySelected) MaterialTheme.colorScheme.primaryContainer else SukimaSurfaceGray,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Box(
-                    modifier = Modifier.padding(vertical = 12.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "一日",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (isOneDaySelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
-                    )
+                Box(modifier = Modifier.padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
+                    Text(text = "一日", style = MaterialTheme.typography.bodyMedium)
                 }
             }
-
             Spacer(modifier = Modifier.height(8.dp))
-
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                val subSlots = listOf("朝", "昼", "夜")
-                subSlots.forEach { slot ->
+                listOf("朝", "昼", "夜").forEach { slot ->
                     val isSelected = selectedSlots.contains(slot)
                     Surface(
                         onClick = {
@@ -763,7 +917,7 @@ private fun BatchRegisterBottomSheet(
                                 if (next.isEmpty()) setOf("一日") else next
                             } else {
                                 val currentSubSlots = (selectedSlots - "一日") + slot
-                                if (currentSubSlots.size >= 3) {
+                                if (currentSubSlots.containsAll(listOf("朝", "昼", "夜"))) {
                                     setOf("一日")
                                 } else {
                                     currentSubSlots
@@ -774,63 +928,28 @@ private fun BatchRegisterBottomSheet(
                         color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else SukimaSurfaceGray,
                         modifier = Modifier.weight(1f)
                     ) {
-                        Box(
-                            modifier = Modifier.padding(vertical = 10.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = slot,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
-                            )
+                        Box(modifier = Modifier.padding(vertical = 6.dp), contentAlignment = Alignment.Center) {
+                            Text(text = slot, style = MaterialTheme.typography.bodyMedium)
                         }
                     }
                 }
             }
-
+            Spacer(modifier = Modifier.height(12.dp))
+            OutlinedTextField(
+                value = memoText,
+                onValueChange = { memoText = it },
+                label = { Text("メモ（任意）") },
+                modifier = Modifier.fillMaxWidth(),
+                maxLines = 2
+            )
             Spacer(modifier = Modifier.height(16.dp))
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .combinedClickable(onClick = { isExpandedDetails = !isExpandedDetails }),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = "詳細（メモ）を入力する",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.secondary
-                )
-                IconButton(onClick = { isExpandedDetails = !isExpandedDetails }) {
-                    Icon(
-                        imageVector = if (isExpandedDetails) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                        contentDescription = "詳細を開閉"
-                    )
-                }
-            }
-
-            if (isExpandedDetails) {
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = memoText,
-                    onValueChange = { memoText = it },
-                    label = { Text("メモ（例: バイト後等）") },
-                    modifier = Modifier.fillMaxWidth(),
-                    maxLines = 3
-                )
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
             Button(
                 onClick = { onRegister(selectedSlots.toList(), memoText) },
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(text = "選択した日に一括登録する")
+                Text(text = "${selectedDates.size}日分の空き時間を一括登録")
             }
-
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(24.dp))
         }
     }
 }
